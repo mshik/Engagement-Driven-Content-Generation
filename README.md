@@ -103,3 +103,24 @@ conda env create -f environment_core.yml
 conda activate socLLM
 sh install_packages.sh
 ```
+
+### 🖥️ Running on Alliance Canada (fir)
+
+Use the provided SLURM script to launch the pipelines on the fir cluster:
+
+```bash
+sbatch src/fir_job.sh # defaults to the synthetic pipeline
+```
+
+Key options you can override at submission time:
+
+- `ACCOUNT`: Alliance/Compute Canada account (defaults to `def-youraccount`).
+- `ENV_NAME`: Conda environment to activate (defaults to `socLLM`).
+- `REPO_DIR`: Repository path if different from the job submission directory.
+- `RUN_TARGET`: Set to `synthetic` (default) or `real-brexit` to run the corresponding pipeline; any other value will be passed directly to `sentiment-propagation.py`.
+
+Example for the real Brexit configuration:
+
+```bash
+ACCOUNT=def-youraccount RUN_TARGET=real-brexit sbatch src/fir_job.sh
+```
