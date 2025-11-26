@@ -8,7 +8,7 @@ import pathlib
 # In[1]:
 
 
-hugging_token = "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"
+hugging_token = ""
 
 # In[2]:
 
@@ -727,3 +727,4 @@ if __name__ == '__main__':
     # args["HOMOPHILY"] = HOMOPHILY
 
     main(args)
+
