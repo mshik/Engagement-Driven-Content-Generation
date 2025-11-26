@@ -1,7 +1,6 @@
-conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia -y
-conda install conda-forge::transformers -y
-pip install trl
-conda install jupyter -y
-conda install -c conda-forge jupyterlab -y
-pip install peft
-conda install conda-forge::wandb -y
+# 2) install PyTorch CUDA 12.1 wheels (self-contained, avoids ITT conflicts)
+pip install --upgrade pip
+pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+
+# 3) install the rest
+pip install transformers trl peft accelerate datasets wandb jupyterlab
