@@ -8,7 +8,7 @@ import pathlib
 # In[1]:
 
 
-hugging_token = "<TOKEN>"
+hugging_token = ""
 
 # In[2]:
 
@@ -22,7 +22,7 @@ login(hugging_token)
 
 import os
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "1,3"
+os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
 import torch
 import networkx as nx
@@ -38,12 +38,24 @@ from transformers import (
     AutoTokenizer,
     LlamaTokenizer,
     HfArgumentParser,
-    pipeline
+    pipeline,
+    BitsAndBytesConfig
 )
 import pandas as pd
 import numpy as np
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer, set_seed
-from trl.core import LengthSampler
+from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer#, set_seed
+from transformers import set_seed
+#from trl.core import LengthSampler
+class LengthSampler:
+    def __init__(self, min_value: int, max_value: int):
+        self.min = int(min_value)
+        self.max = int(max_value)
+
+    def __call__(self) -> int:
+        if self.max <= self.min:
+            return self.min
+        # torch.randint upper bound is exclusive
+        return torch.randint(self.min, self.max + 1, (1,)).item()
 
 import matplotlib.pyplot as plt
 
@@ -89,6 +101,7 @@ class ScriptArguments:
     output_max_length: Optional[int] = field(default=128, metadata={"help": "maximum length for generation"})
     mini_batch_size: Optional[int] = field(default=1, metadata={"help": "the PPO minibatch size"})
     batch_size: Optional[int] = field(default=8, metadata={"help": "the batch size"})
+    #batch_size: Optional[int] = field(default=2, metadata={"help": "the batch size"})
     ppo_epochs: Optional[int] = field(default=1, metadata={"help": "the number of ppo epochs"})
     gradient_accumulation_steps: Optional[int] = field(
         default=4, metadata={"help": "the number of gradient accumulation steps"}
@@ -125,7 +138,7 @@ sys.path.insert(0, "SocialAIGym/src")
 from data_component import DataComponent
 from information_diffusion_component import BoundedConfidenceDiffusionComponent
 from opinion_diffusion_component import FJDiffusionComponent
-from brexit_classifier import StanceClassifier
+#from brexit_classifier import StanceClassifier
 from graph_utils import *
 
 
@@ -214,13 +227,28 @@ def main(args):
 
     opinions = information_diffusion_model.get_opinions()
 
+    path = "../results/"  # TO CHANGE
+
+    if "brexit" in TOPIC or "referendum" in TOPIC:  # real data
+        config_path = f"initial-config-LLM_{LLM_pos}"
+    else:
+        config_path = f"initial-config-LLM_{LLM_pos}-MODULARITY_{MODULARITY}-HOMOPHILY_{HOMOPHILY}-NETWORK_OPINION_{NETWORK_OPINION}"
+
+    saving_fn = f"{MODEL_NAME}-{TYPE}-sentiment-propagation-readability-{PROPAGATION}-{TOPIC}"
+
+    utility_saving_path = os.path.join(path, config_path, saving_fn)
+
+    if not os.path.exists(utility_saving_path):
+        os.makedirs(utility_saving_path)
+
     print(
         f'Opinions stats \nmean: {opinions.mean()}\nstd: {opinions.std()}\nmin: {opinions.min()}\nmax: {opinions.max()}')
 
     _ = plt.hist(opinions, bins=25, range=[0, 1])
     plt.xlabel('opinion value')
     plt.ylabel('occurrences')
-    plt.show()
+    #plt.show()
+    plt.savefig(os.path.join(utility_saving_path, f'opinion_distribution.png'))
 
     # In[8]:
 
@@ -228,6 +256,7 @@ def main(args):
                         "llama2": "NousResearch/Llama-2-7b-chat-hf", "mistral": "mistralai/Mistral-7B-v0.1"}
     model_name = MODEL_NAMES_DICT[MODEL_NAME]
 
+    '''
     config = PPOConfig(
         early_stopping=True,
         target_kl=50,
@@ -241,6 +270,27 @@ def main(args):
         optimize_cuda_cache=True,
         ppo_epochs=script_args.ppo_epochs,
         seed=script_args.seed
+    )
+    '''
+    config = PPOConfig(
+        # training / logging
+        learning_rate=script_args.learning_rate,
+        gradient_accumulation_steps=script_args.gradient_accumulation_steps,
+        batch_size=script_args.batch_size,             # or local_batch_size/micro_batch_size if you prefer
+        mini_batch_size=script_args.mini_batch_size,   # or local_mini_batch_size
+        num_ppo_epochs=script_args.ppo_epochs,         # ← was ppo_epochs
+        seed=script_args.seed,
+        report_to=script_args.log_with,                             # ← replaces log_with
+        project=model_name,                             # optional; shows in W&B “Project”
+
+        # PPO / KL controls in 0.25.1
+        kl_coef=0.2,                                   # strength of KL penalty
+        kl_estimator="kl",                             # "kl" | "js" | "mse" (depends on your preference)
+
+        # (optional) run shaping present in 0.25.1
+        total_episodes=None#,                           # or an int if you want to cap episodes
+        #response_length=script_args.get("response_length", 128),
+        #temperature=script_args.get("temperature", 1.0),
     )
 
     # Below is an example function to build the dataset. In our case, we use the IMDB dataset
@@ -313,7 +363,8 @@ def main(args):
     def collator(data):
         return dict((key, [d[key] for d in data]) for key in data[0])
 
-    if "decapoda" in config.model_name.lower():
+    #if "decapoda" in config.model_name.lower():
+    if "decapoda" in config.project.lower():
         tokenizer = AutoTokenizer.from_pretrained(script_args.model_name)
         # required for llama
         tokenizer.add_special_tokens(
@@ -325,7 +376,8 @@ def main(args):
             }
         )
     else:
-        tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+        #tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+        tokenizer = AutoTokenizer.from_pretrained(config.project)
         if getattr(tokenizer, "pad_token", None) is None:
             tokenizer.pad_token = tokenizer.eos_token
 
@@ -334,7 +386,8 @@ def main(args):
 
     print(dataset["query"][0])
 
-    if "gemma" in config.model_name:
+    #if "gemma" in config.model_name:
+    if "gemma" in config.project:
         lora_config = LoraConfig(
             lora_alpha=16,
             lora_dropout=0.1,
@@ -355,11 +408,18 @@ def main(args):
         )
 
     model = AutoModelForCausalLMWithValueHead.from_pretrained(
-        config.model_name,
+        #config.model_name,
+        config.project,
         load_in_8bit=False,
         device_map="auto",
+        #load_in_4bit=True,
+        #device_map='cuda:0',
+        #device_map=None,
         peft_config=lora_config
     )
+    #from accelerate import disk_offload
+    #disk_offload(model=model, offload_dir="offload")
+    #model.to("cuda")
 
     optimizer = None
     if script_args.adafactor:
@@ -451,20 +511,6 @@ def main(args):
         "pad_token_id": tokenizer.pad_token_id,
         "eos_token_id": 100_000
     }
-
-    path = "SAVING PATH"  # TO CHANGE
-
-    if "brexit" in TOPIC or "referendum" in TOPIC:  # real data
-        config_path = f"initial-config-LLM_{LLM_pos}"
-    else:
-        config_path = f"initial-config-LLM_{LLM_pos}-MODULARITY_{MODULARITY}-HOMOPHILY_{HOMOPHILY}-NETWORK_OPINION_{NETWORK_OPINION}"
-
-    saving_fn = f"{MODEL_NAME}-{TYPE}-sentiment-propagation-readability-{PROPAGATION}-{TOPIC}"
-
-    utility_saving_path = os.path.join(path, config_path, saving_fn)
-
-    if not os.path.exists(utility_saving_path):
-        os.makedirs(utility_saving_path)
 
     if TRAIN:
 
@@ -681,3 +727,4 @@ if __name__ == '__main__':
     # args["HOMOPHILY"] = HOMOPHILY
 
     main(args)
+
